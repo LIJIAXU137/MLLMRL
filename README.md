@@ -20,9 +20,13 @@ Our proposed algorithm, **Visually-Perceptive Policy Optimization (VPPO)**, is t
 
 ---
 
-## 📢 News
+## 🚀 News
 
 -   **[2025-11-07]** We have released **VPPO-8B**, a new model that achieves excellent performance. It was trained using our VPPO algorithm, starting from the **Qwen3-VL-8B-Instruct** model. Compared to our previous training runs, we increased the `max response length` and the `Entropy Penalty Coefficient`. You can find more details and access the model on our [Hugging Face Models collection](https://huggingface.co/collections/chamber111/vppo-model-68e79d724ad79e69c6f60d58).
+
+<div align="center">
+<img src="./assets/VPPO-8B.png" width="900"/>
+</div>
 
 ---
 
