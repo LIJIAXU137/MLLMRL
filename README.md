@@ -30,6 +30,12 @@ Our proposed algorithm, **Visually-Perceptive Policy Optimization (VPPO)**, is t
 
 ---
 
+## 🚧 TODO
+
+-   [ ] We are currently preparing the training scripts and configurations for **Qwen3-VL-8B-Instruct** for public release. The code used to train our VPPO-8B model is being cleaned and documented, and will be added to the repository soon.
+
+---
+
 ## 🎯 The Core Insight: Not All Tokens Are Created Equal
 
 Standard reinforcement learning methods for LVLMs suffer from a fundamental flaw: they treat every token in a generated response as equally important. A single reward is broadcast indiscriminately, rewarding generic phrases just as much as the critical step where the model *perceives a key detail* from the image.
