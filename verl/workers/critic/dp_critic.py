@@ -17,7 +17,7 @@ Implement Critic
 
 import os
 from collections import defaultdict
-from typing import Any, Dict
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -51,7 +51,7 @@ class DataParallelPPOCritic(BasePPOCritic):
         self.critic_module = critic_module
         self.critic_optimizer = critic_optimizer
 
-    def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def _forward_micro_batch(self, micro_batch: dict[str, torch.Tensor]) -> torch.Tensor:
         input_ids = micro_batch["input_ids"]
         batch_size, seqlen = input_ids.shape
         attention_mask = micro_batch["attention_mask"]
@@ -59,7 +59,7 @@ class DataParallelPPOCritic(BasePPOCritic):
         responses = micro_batch["responses"]
         response_length = responses.size(-1)
         if position_ids.dim() == 3:  # qwen2vl mrope
-            position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
+            position_ids = position_ids.transpose(0, 1)  # (bsz, 4, seqlen) -> (4, bsz, seqlen)
 
         if "multi_modal_inputs" in micro_batch:
             multi_modal_inputs = batch_collate(micro_batch["multi_modal_inputs"])
@@ -79,7 +79,7 @@ class DataParallelPPOCritic(BasePPOCritic):
                     index_first_axis(rearrange(position_ids, "c b s ... -> (b s) c ..."), indices)
                     .transpose(0, 1)
                     .unsqueeze(1)
-                )  # (3, bsz, seqlen) -> (3, 1, bsz * seqlen)
+                )  # (4, bsz, seqlen) -> (4, 1, bsz * seqlen)
             else:
                 position_ids_rmpad = index_first_axis(
                     rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices
@@ -169,7 +169,7 @@ class DataParallelPPOCritic(BasePPOCritic):
         values = values * data.batch["response_mask"]  # only action tokens have values
         return values
 
-    def update_critic(self, data: DataProto) -> Dict[str, Any]:
+    def update_critic(self, data: DataProto) -> dict[str, Any]:
         self.critic_module.train()
 
         select_keys = ["input_ids", "attention_mask", "position_ids", "responses", "response_mask"]
@@ -217,11 +217,8 @@ class DataParallelPPOCritic(BasePPOCritic):
                     loss = vf_loss * torch.sum(response_mask) * self.world_size / total_response_tokens
                     loss.backward()
 
-                    batch_metrics = {
-                        "critic/vf_loss": vf_loss.detach().item(),
-                        "critic/vf_clipfrac": vf_metrics["vf_clipfrac"],
-                        "critic/vpred_mean": vf_metrics["vpred_mean"],
-                    }
+                    batch_metrics = {f"critic/{k}": v for k, v in vf_metrics.items()}
+                    batch_metrics["critic/vf_loss"] = vf_loss.detach().item()
                     append_to_dict(metrics, batch_metrics)
 
                 grad_norm = self._optimizer_step()

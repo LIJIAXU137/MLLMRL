@@ -16,7 +16,7 @@ import math
 import os
 from collections import defaultdict
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import torch
@@ -28,11 +28,10 @@ from qwen_vl_utils.vision_process import fetch_video
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
 
-from ..models.transformers.qwen2_vl import get_rope_index
 from . import torch_functional as VF
 
 
-def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
+def collate_fn(features: list[dict[str, Any]]) -> dict[str, Any]:
     tensors = defaultdict(list)
     non_tensors = defaultdict(list)
     for feature in features:
@@ -52,7 +51,7 @@ def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def process_image(
-    image: Union[Dict[str, Any], ImageObject, str], min_pixels: Optional[int], max_pixels: Optional[int]
+    image: Union[dict[str, Any], ImageObject, str], min_pixels: Optional[int], max_pixels: Optional[int]
 ) -> ImageObject:
     if isinstance(image, str):
         image = Image.open(image)
@@ -80,7 +79,7 @@ def process_image(
 
 def process_video(
     video: str, min_pixels: Optional[int], max_pixels: Optional[int], video_fps: float, return_fps: bool = False
-) -> Union[List[ImageObject], Tuple[List[ImageObject], List[float]]]:
+) -> Union[list[ImageObject], tuple[list[ImageObject], list[float]]]:
     vision_info = {"video": video, "min_pixels": min_pixels, "max_pixels": max_pixels, "fps": video_fps}
     return fetch_video(vision_info, return_video_sample_fps=return_fps)
 
@@ -150,7 +149,7 @@ class RLHFDataset(Dataset):
                 num_proc=filter_overlong_prompts_workers,
             )
 
-    def _build_messages(self, example: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _build_messages(self, example: dict[str, Any]) -> list[dict[str, Any]]:
         prompt_str: str = example[self.prompt_key]
         if self.format_prompt:
             format_prompt = Template(self.format_prompt.strip())
@@ -180,7 +179,7 @@ class RLHFDataset(Dataset):
         else:
             return [{"role": "user", "content": prompt_str}]
 
-    def _filter_overlong_prompts(self, example: Dict[str, Any]) -> bool:
+    def _filter_overlong_prompts(self, example: dict[str, Any]) -> bool:
         messages = self._build_messages(example)
         if self.image_key in example:
             prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -265,8 +264,13 @@ class RLHFDataset(Dataset):
             attention_mask = model_inputs.pop("attention_mask")[0]
 
         if self.processor is not None and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__:
-            # qwen2vl mrope
-            position_ids = get_rope_index(
+            # qwen-vl mrope
+            if "Qwen3VLProcessor" in self.processor.__class__.__name__:
+                from ..models.transformers.qwen3_vl import get_rope_index
+            else:
+                from ..models.transformers.qwen2_vl import get_rope_index
+
+            vision_position_ids = get_rope_index(
                 self.processor,
                 input_ids=input_ids,
                 image_grid_thw=model_inputs.get("image_grid_thw", None),
@@ -274,6 +278,8 @@ class RLHFDataset(Dataset):
                 second_per_grid_ts=model_inputs.get("second_per_grid_ts", None),
                 attention_mask=attention_mask,
             )  # (3, seq_length)
+            text_position_ids = torch.arange(len(input_ids)).unsqueeze(0)  # (1, seq_length)
+            position_ids = torch.cat((text_position_ids, vision_position_ids), dim=0)  # (4, seq_length)
         else:
             position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)  # (seq_length,)
 

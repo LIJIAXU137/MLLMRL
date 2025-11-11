@@ -115,13 +115,18 @@ def main():
                 "VLLM_LOGGING_LEVEL": "WARN",
                 "TORCH_NCCL_AVOID_RECORD_STREAMS": "1",
                 "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False",
-                "PYTHONUNBUFFERED": "1",
+                "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+                "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
             }
         }
         ray.init(runtime_env=runtime_env)
 
     runner = Runner.remote()
     ray.get(runner.run.remote(ppo_config))
+
+    if ppo_config.trainer.ray_timeline is not None:
+        # use `export RAY_PROFILING=1` to record the ray timeline
+        ray.timeline(filename=ppo_config.trainer.ray_timeline)
 
 
 if __name__ == "__main__":

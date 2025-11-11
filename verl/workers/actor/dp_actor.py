@@ -17,7 +17,7 @@ Implement Actor
 
 import os
 from collections import defaultdict
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import torch
 import torch.distributed as dist
@@ -67,7 +67,7 @@ class DataParallelPPOActor(BasePPOActor):
         else:
             self.log_probs_from_logits = VF.log_probs_from_logits
 
-    def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor], temperature: float) -> torch.Tensor:
+    def _forward_micro_batch(self, micro_batch: dict[str, torch.Tensor], temperature: float) -> torch.Tensor:
         """
         Returns:
             log_probs: # (bs, response_len)
@@ -79,7 +79,7 @@ class DataParallelPPOActor(BasePPOActor):
         responses = micro_batch["responses"]
         response_length = responses.size(-1)
         if position_ids.dim() == 3:  # qwen2vl mrope
-            position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
+            position_ids = position_ids.transpose(0, 1)  # (bsz, 4, seqlen) -> (4, bsz, seqlen)
 
         multi_modal_inputs = defaultdict(list)
         if "multi_modal_inputs" in micro_batch:
@@ -98,7 +98,7 @@ class DataParallelPPOActor(BasePPOActor):
                     index_first_axis(rearrange(position_ids, "c b s ... -> (b s) c ..."), indices)
                     .transpose(0, 1)
                     .unsqueeze(1)
-                )  # (3, bsz, seqlen) -> (3, 1, bsz * seqlen)
+                )  # (4, bsz, seqlen) -> (4, 1, bsz * seqlen)
             else:
                 position_ids_rmpad = index_first_axis(
                     rearrange(position_ids.unsqueeze(-1), "b s ... -> (b s) ..."), indices
@@ -239,7 +239,7 @@ class DataParallelPPOActor(BasePPOActor):
 
         return log_probs
 
-    def update_policy(self, data: DataProto) -> Dict[str, Any]:
+    def update_policy(self, data: DataProto) -> dict[str, Any]:
         self.actor_module.train()
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid slient error
@@ -534,7 +534,6 @@ class DataParallelPPOActor(BasePPOActor):
                             # Apply the final scaling factor to the advantages.
                             advantages = advantages * scaling_factor.unsqueeze(1)
 
-
                     pg_loss, pg_metrics = compute_policy_loss(
                         old_log_probs=old_log_probs,
                         log_probs=log_probs,
@@ -543,6 +542,7 @@ class DataParallelPPOActor(BasePPOActor):
                         clip_ratio_low=self.config.clip_ratio_low,
                         clip_ratio_high=self.config.clip_ratio_high,
                         clip_ratio_dual=self.config.clip_ratio_dual,
+                        loss_type=self.config.loss_type,
                         loss_avg_mode=self.config.loss_avg_mode,
                         loss_token_mask=loss_token_mask
                     )
@@ -570,13 +570,8 @@ class DataParallelPPOActor(BasePPOActor):
                     loss = loss * torch.sum(response_mask) * self.world_size / total_response_tokens
                     loss.backward()
 
-                    batch_metrics = {
-                        "actor/pg_loss": pg_loss.detach().item(),
-                        "actor/pg_clipfrac_higher": pg_metrics["pg_clipfrac_higher"],
-                        "actor/pg_clipfrac_lower": pg_metrics["pg_clipfrac_lower"],
-                        "actor/entropy_loss": pg_metrics["entropy_loss"],
-                        "actor/ppo_kl": pg_metrics["ppo_kl"],
-                    }
+                    batch_metrics = {f"actor/{k}": v for k, v in pg_metrics.items()}
+                    batch_metrics["actor/pg_loss"] = pg_loss.detach().item()
                     append_to_dict(metrics, batch_metrics)
 
                 grad_norm = self._optimizer_step()

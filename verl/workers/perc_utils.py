@@ -1,5 +1,6 @@
 import numpy as np
 from PIL import Image
+from typing import Union, Tuple
 
 def random_patch_blackening(pil_img, patch_size=14, black_prob=0.5):
     """Randomly blacken square patches in a PIL image."""

@@ -29,8 +29,8 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
     GenerationConfig,
     PreTrainedModel,
 )
@@ -193,14 +193,14 @@ class FSDPWorker(Worker):
             torch_dtype = PrecisionType.to_dtype(fsdp_config.torch_dtype)
 
         if role == "critic":
-            auto_class = AutoModelForTokenClassification
-        elif type(self.model_config) in AutoModelForVision2Seq._model_mapping.keys():
-            auto_class = AutoModelForVision2Seq
+            AutoClass = AutoModelForTokenClassification
+        elif type(self.model_config) in AutoModelForImageTextToText._model_mapping.keys():
+            AutoClass = AutoModelForImageTextToText
         else:
-            auto_class = AutoModelForCausalLM
+            AutoClass = AutoModelForCausalLM
 
         if (not fsdp_config.enable_rank0_init) or self.device_mesh.get_local_rank("fsdp") == 0:
-            model = auto_class.from_pretrained(
+            model = AutoClass.from_pretrained(
                 model_config.model_path,
                 config=self.model_config,
                 torch_dtype=torch_dtype,
@@ -211,7 +211,7 @@ class FSDPWorker(Worker):
             )
         else:
             with no_init_weights(), init_empty_weights():
-                model = auto_class.from_config(
+                model = AutoClass.from_config(
                     self.model_config,
                     torch_dtype=torch_dtype,
                     attn_implementation="flash_attention_2",
@@ -455,32 +455,35 @@ class FSDPWorker(Worker):
             max_pixels = data.meta_info["max_pixels"]
             video_fps = data.meta_info["video_fps"]
             batch_multi_modal_inputs = []
-            for multi_modal_data in data.non_tensor_batch["multi_modal_data"]:  # process multi modal data per sample
-                images, videos = [], []
-                if "images" in multi_modal_data:
-                    for image in multi_modal_data["images"]:
-                        images.append(process_image(image, min_pixels, max_pixels))
+            multi_modal_inputs_cache = {}  # avoid repeated processing for n > 1 samples
+            for index, multi_modal_data in zip(
+                data.non_tensor_batch["uid"], data.non_tensor_batch["multi_modal_data"]
+            ):  # process multi modal data per sample
+                if index not in multi_modal_inputs_cache:
+                    images, videos = [], []
+                    if "images" in multi_modal_data:
+                        for image in multi_modal_data["images"]:
+                            images.append(process_image(image, min_pixels, max_pixels))
 
-                if "videos" in multi_modal_data:
-                    for video in multi_modal_data["videos"]:
-                        videos.append(process_video(video, min_pixels, max_pixels, video_fps))
+                    if "videos" in multi_modal_data:
+                        for video in multi_modal_data["videos"]:
+                            videos.append(process_video(video, min_pixels, max_pixels, video_fps))
 
-                if len(images) != 0:
-                    # it's necessary to add `dict` to properly convert batch features to dict
-                    # otherwise the batch features will be converted to dict keys
-                    # see https://github.com/hiyouga/EasyR1/pull/339
-                    multi_modal_inputs = dict(self.processor.image_processor(images=images, return_tensors="pt"))
-                elif len(videos) != 0:
-                    multi_modal_inputs = dict(
-                        self.processor.image_processor(images=None, videos=videos, return_tensors="pt")
-                    )
-                else:
-                    multi_modal_inputs = {}
+                    if len(images) != 0:
+                        # it's necessary to add `dict` to properly convert batch features to dict
+                        # otherwise the batch features will be converted to dict keys
+                        # see https://github.com/hiyouga/EasyR1/pull/339
+                        multi_modal_inputs = dict(self.processor.image_processor(images=images, return_tensors="pt"))
+                    elif len(videos) != 0:
+                        multi_modal_inputs = dict(
+                            self.processor.image_processor(images=None, videos=videos, return_tensors="pt")
+                        )
+                    else:
+                        multi_modal_inputs = {}
 
-                multi_modal_inputs = {
-                    k: v.to(torch.cuda.current_device(), non_blocking=True) for k, v in multi_modal_inputs.items()
-                }
-                batch_multi_modal_inputs.append(multi_modal_inputs)
+                    multi_modal_inputs_cache[index] = multi_modal_inputs
+
+                batch_multi_modal_inputs.append(multi_modal_inputs_cache[index])
 
             self._cache["uid"] = data.non_tensor_batch["uid"]
             self._cache["multi_modal_inputs"] = np.array(batch_multi_modal_inputs, dtype=object)
@@ -525,6 +528,7 @@ class FSDPWorker(Worker):
             batch_multi_modal_inputs.append(multi_modal_inputs)
 
         data.non_tensor_batch["multi_modal_inputs"] = np.array(batch_multi_modal_inputs, dtype=object)
+
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def update_actor(self, data: DataProto):
@@ -667,7 +671,7 @@ class FSDPWorker(Worker):
 
         output = output.to("cpu")
         return output
-    
+
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def compute_aug_log_probs(self, data: DataProto):
         assert self._has_actor

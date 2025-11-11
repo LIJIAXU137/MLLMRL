@@ -17,14 +17,14 @@ Actor config
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 
 @dataclass
 class ModelConfig:
     model_path: Optional[str] = None
     tokenizer_path: Optional[str] = None
-    override_config: Dict[str, Any] = field(default_factory=dict)
+    override_config: dict[str, Any] = field(default_factory=dict)
     enable_gradient_checkpointing: bool = True
     trust_remote_code: bool = True
     freeze_vision_tower: bool = False
@@ -43,7 +43,7 @@ class ModelConfig:
 @dataclass
 class OptimConfig:
     lr: float = 1e-6
-    betas: Tuple[float, float] = (0.9, 0.999)
+    betas: tuple[float, float] = (0.9, 0.999)
     weight_decay: float = 1e-2
     strategy: str = "adamw"
     lr_warmup_ratio: float = 0.0
@@ -92,6 +92,8 @@ class ActorConfig:
     """constant C in dual-clip PPO, clips when advantage < -C"""
     loss_avg_mode: str = "token"
     """loss average mode: `token`, `seq`"""
+    loss_type: str = "default"
+    """loss type: `default`, `gspo`, `cispo`"""
     ppo_epochs: int = 1
     """number of ppo epochs for each rollout batch"""
     padding_free: bool = True
@@ -127,6 +129,7 @@ class ActorConfig:
 
     use_advantage_shaping: bool = False
     advantage_scaling_min: float = 0.8
+
 
 @dataclass
 class RefConfig:
