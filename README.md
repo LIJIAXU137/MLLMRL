@@ -22,17 +22,12 @@ Our proposed algorithm, **Visually-Perceptive Policy Optimization (VPPO)**, is t
 
 ## 🚀 News
 
+-   **[2025-11-11]** The training script for **VPPO-8B** is now available! We've updated our codebase to fully support training based on **Qwen3-VL-8B-Instruct**. You can find the script in `examples/configs/train_vppo_8b.sh`.
 -   **[2025-11-07]** We have released **VPPO-8B**, a new model that achieves excellent performance. It was trained using our VPPO algorithm, starting from the **Qwen3-VL-8B-Instruct** model. Compared to our previous training runs, we increased the `max response length` and the `Entropy Penalty Coefficient`. You can find more details and access the model on our [Hugging Face Models collection](https://huggingface.co/collections/chamber111/vppo-model-68e79d724ad79e69c6f60d58).
 
 <div align="center">
 <img src="./assets/VPPO-8B.png" width="900"/>
 </div>
-
----
-
-## 🚧 TODO
-
--   [ ] We are currently preparing the training scripts and configurations for **Qwen3-VL-8B-Instruct** for public release. The code used to train our VPPO-8B model is being cleaned and documented, and will be added to the repository soon.
 
 ---
 
@@ -91,8 +86,8 @@ VPPO not only achieves a higher final performance but gets there faster and more
 ### 1. Recommended Environment
 
 -   Python 3.10
--   PyTorch 2.6
--   CUDA 12.4
+-   PyTorch 2.8.0
+-   CUDA 12.8
 
 ### 2. Environment Setup
 
@@ -111,7 +106,7 @@ pip install -e .
 
 ### 3. Training with VPPO
 
-The training pipeline is adapted from [EasyR1](https://github.com/hiyouga/EasyR1). We provide example scripts for training 7B models with VPPO.
+The training pipeline is adapted from [EasyR1](https://github.com/hiyouga/EasyR1). We provide example scripts for training 7B and 8B models with VPPO.
 
 -   **Hardware for Qwen2.5-VL-7B:** 8 x H800 (80G) GPUs.
 -   **Hardware for Qwen2.5-VL-32B:** 32 x H800 (80G) GPUs.
@@ -119,6 +114,9 @@ The training pipeline is adapted from [EasyR1](https://github.com/hiyouga/EasyR1
 ```bash
 # To train the VPPO-7B model
 bash examples/configs/train_vppo_7b.sh
+
+# To train the VPPO-8B model
+bash examples/configs/train_vppo_8b.sh
 ```
 
 ### 4. Evaluation
