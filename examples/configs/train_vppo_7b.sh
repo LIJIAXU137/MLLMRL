@@ -2,13 +2,14 @@
 
 set -x
 
+export WANDB_API_KEY=2639319e5c431af3ea5a25aa004b985328a8067c
 export PYTHONUNBUFFERED=1
 export RAY_memory_usage_threshold=0.98
 
-CUDA_IDS=0,1,2,3,4,5,6,7
-N_GPU=8
+CUDA_IDS=4,5,6,7
+N_GPU=4
 
-MODEL_PATH=Qwen/Qwen2.5-VL-7B-Instruct
+MODEL_PATH="/gemini/space/telemem/model_zoo/Qwen2.5-VL-7B-Instruct"
 
 TOTAL_EPOCHES=2
 GLOBAL_BATCH_SIZE=128
@@ -23,11 +24,12 @@ advantage_scaling_min=0.9
 entropy_penalty_coef=0.06
 
 
-EXP_NAME="perc${top_p_perception_tokens}_advsc${advantage_scaling_min}_pen${entropy_penalty_coef}_ep${TOTAL_EPOCHES}_rollout${rollout}"
+# EXP_NAME="perc${top_p_perception_tokens}_advsc${advantage_scaling_min}_pen${entropy_penalty_coef}_ep${TOTAL_EPOCHES}_rollout${rollout}"
+EXP_NAME="dapo_7b"
 
 CONGI_FILE="examples/configs/config.yaml"
-TRAIN_FILE="chamber111/VPPO_ViRL39K_train"
-VAL_FILE="chamber111/VPPO_MMK12_validation"
+TRAIN_FILE="/gemini/space/telemem/ljx/VPPO_ViRL39K_train"
+VAL_FILE="/gemini/space/telemem/ljx/VPPO_MMK12_validation"
 
 FORMAT_PROMPT="examples/format_prompt/math_format_perception.jinja"
 REWARD_FUNCTION="examples/reward_function/math.py:compute_score_wo_format"
@@ -47,14 +49,15 @@ CUDA_VISIBLE_DEVICES=${CUDA_IDS} python3 -m verl.trainer.main \
     worker.reward.reward_function=${REWARD_FUNCTION} \
     data.max_prompt_length=${MAX_PROMPT_LENGTH} \
     trainer.project_name="7b_vppo" \
-    trainer.logger=['console','swanlab'] \
+    trainer.logger=['console','wandb'] \
     algorithm.use_vppo_on_entropy=False \
-    algorithm.use_vppo_on_perception=True \
-    algorithm.use_advantage_shaping=True \
+    algorithm.use_vppo_on_perception=False \
+    algorithm.use_advantage_shaping=False \
     algorithm.use_entropy_penalty=True \
     algorithm.top_p_perception_tokens=${top_p_perception_tokens} \
     algorithm.entropy_penalty_coef=${entropy_penalty_coef} \
     algorithm.advantage_scaling_min=${advantage_scaling_min} \
     worker.rollout.n=${rollout} \
+    worker.rollout.limit_images=8 \
     worker.actor.micro_batch_size_per_device_for_experience=32 \
     worker.actor.micro_batch_size_per_device_for_update=16

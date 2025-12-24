@@ -126,16 +126,26 @@ class RLHFDataset(Dataset):
         else:
             data_split = "train"
 
-        # if os.path.isdir(data_path):
-        #     # when we use dataset builder, we should always refer to the train split
-        #     file_type = os.path.splitext(os.listdir(data_path)[0])[-1][1:].replace("jsonl", "json")
-        #     self.dataset = load_dataset(file_type, data_dir=data_path, split=data_split)
-        # elif os.path.isfile(data_path):
-        #     file_type = os.path.splitext(data_path)[-1][1:].replace("jsonl", "json")
-        #     self.dataset = load_dataset(file_type, data_files=data_path, split=data_split)
-        # else:
-        # load remote dataset from huggingface hub
-        self.dataset = load_dataset(data_path, split=data_split)
+        if os.path.exists(data_path):
+            if os.path.isdir(data_path):
+                files = os.listdir(data_path)
+                parquet_files = [f for f in files if f.endswith('.parquet')]
+                json_files = [f for f in files if f.endswith('.json') or f.endswith('.jsonl')]
+                if parquet_files:
+                    self.dataset = load_dataset('parquet', data_files={data_split: os.path.join(data_path, '*.parquet')}, split=data_split)
+                elif json_files:
+                    self.dataset = load_dataset('json', data_files={data_split: os.path.join(data_path, '*.json*')}, split=data_split)
+                else:
+                    self.dataset = load_dataset(data_path, split=data_split)
+            else:
+                ext = os.path.splitext(data_path)[-1][1:].replace("jsonl", "json")
+                if ext in ['parquet', 'json', 'csv']:
+                    self.dataset = load_dataset(ext, data_files={data_split: data_path}, split=data_split)
+                else:
+                    self.dataset = load_dataset(data_path, split=data_split)
+        else:
+            # load remote dataset from huggingface hub
+            self.dataset = load_dataset(data_path, split=data_split)
 
         self.format_prompt = None
         if format_prompt:
