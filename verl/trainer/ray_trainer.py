@@ -611,12 +611,32 @@ class RayPPOTrainer:
                     old_log_probs = self.actor_rollout_ref_wg.compute_log_probs(batch)
                     batch = batch.union(old_log_probs)
 
-                if self.config.algorithm.use_vppo_on_perception:
+                if self.config.algorithm.use_vppo_on_perception or self.config.algorithm.use_perception_kl_loss or self.config.algorithm.use_perception_kl_reward:
                     # compute log_probs with augmented images
                     with timer("aug", timing_raw):
                         aug_batch = deepcopy(batch)
                         aug_log_probs = self.actor_rollout_ref_wg.compute_aug_log_probs(aug_batch)
                         batch = batch.union(aug_log_probs)
+
+                if (self.config.algorithm.use_caption_kl_loss or self.config.algorithm.use_caption_kl_reward) and "caption_prompt_ids" in batch.batch:
+                    # compute log_probs with captions instead of images
+                    with timer("caption", timing_raw):
+                        caption_log_probs = self.actor_rollout_ref_wg.compute_caption_log_probs(batch)
+                        batch = batch.union(caption_log_probs)
+
+                if self.config.algorithm.use_sp_kl_reward:
+                    # compute log_probs with semantics-preserving augmented images
+                    with timer("sp", timing_raw):
+                        sp_batch = deepcopy(batch)
+                        sp_log_probs = self.actor_rollout_ref_wg.compute_sp_log_probs(sp_batch)
+                        batch = batch.union(sp_log_probs)
+
+                if self.config.algorithm.use_sc_kl_reward:
+                    # compute log_probs with semantics-changing augmented images
+                    with timer("sc", timing_raw):
+                        sc_batch = deepcopy(batch)
+                        sc_log_probs = self.actor_rollout_ref_wg.compute_sc_log_probs(sc_batch)
+                        batch = batch.union(sc_log_probs)
 
                 # compute ref_log_probs
                 if self.use_reference_policy:
@@ -644,7 +664,39 @@ class RayPPOTrainer:
                         batch, kl_metrics = apply_kl_penalty(batch, self.kl_ctrl, self.config.algorithm.kl_penalty)
                         metrics.update(kl_metrics)
                     else:
-                        batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
+                        batch.batch["token_level_rewards"] = batch.batch["token_level_scores"].clone()
+
+                    if self.config.algorithm.use_perception_kl_reward and "aug_log_probs" in batch.batch:
+                        # compute perception kl using K1 (old_log_probs - aug_log_probs)
+                        kld_perc = compute_kl(batch.batch["old_log_probs"], batch.batch["aug_log_probs"], kl_penalty="kl")
+                        kld_perc = kld_perc * batch.batch["response_mask"]
+                        # Perception KL is a bonus in VPPO (maximize divergence with augmented images)
+                        batch.batch["token_level_rewards"] = batch.batch["token_level_rewards"] + self.config.algorithm.perception_kl_coef * kld_perc
+                        metrics["actor/perception_kl_reward"] = torch.mean(VF.masked_mean(kld_perc, mask=batch.batch["response_mask"], dim=-1)).item()
+
+                    if self.config.algorithm.use_caption_kl_reward and "caption_log_probs" in batch.batch:
+                        # compute caption kl using K1 (old_log_probs - caption_log_probs)
+                        kld_caption = compute_kl(batch.batch["old_log_probs"], batch.batch["caption_log_probs"], kl_penalty="kl")
+                        kld_caption = kld_caption * batch.batch["response_mask"]
+                        # Caption KL is a penalty in VPPO (minimize divergence with caption-only prompt)
+                        batch.batch["token_level_rewards"] = batch.batch["token_level_rewards"] - self.config.algorithm.caption_kl_coef * kld_caption
+                        metrics["actor/caption_kl_reward"] = torch.mean(VF.masked_mean(kld_caption, mask=batch.batch["response_mask"], dim=-1)).item()
+
+                    if self.config.algorithm.use_sp_kl_reward and "sp_log_probs" in batch.batch:
+                        # compute sp kl (semantics-preserving)
+                        kld_sp = compute_kl(batch.batch["old_log_probs"], batch.batch["sp_log_probs"], kl_penalty="kl")
+                        kld_sp = kld_sp * batch.batch["response_mask"]
+                        # SP KL is a penalty (robustness)
+                        batch.batch["token_level_rewards"] = batch.batch["token_level_rewards"] - self.config.algorithm.sp_kl_coef * kld_sp
+                        metrics["actor/sp_kl_reward"] = torch.mean(VF.masked_mean(kld_sp, mask=batch.batch["response_mask"], dim=-1)).item()
+
+                    if self.config.algorithm.use_sc_kl_reward and "sc_log_probs" in batch.batch:
+                        # compute sc kl (semantics-changing)
+                        kld_sc = compute_kl(batch.batch["old_log_probs"], batch.batch["sc_log_probs"], kl_penalty="kl")
+                        kld_sc = kld_sc * batch.batch["response_mask"]
+                        # SC KL is a bonus (sensitivity)
+                        batch.batch["token_level_rewards"] = batch.batch["token_level_rewards"] + self.config.algorithm.sc_kl_coef * kld_sc
+                        metrics["actor/sc_kl_reward"] = torch.mean(VF.masked_mean(kld_sc, mask=batch.batch["response_mask"], dim=-1)).item()
 
                     # compute advantages, executed on the driver process
                     batch = compute_advantage(

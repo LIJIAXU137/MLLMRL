@@ -2,32 +2,35 @@
 
 set -x
 
-export WANDB_API_KEY=2639319e5c431af3ea5a25aa004b985328a8067c
-export WANDB_RUN_ID="8gvv9eu8"
-export WANDB_RESUME="must"
 export PYTHONUNBUFFERED=1
 export RAY_memory_usage_threshold=0.98
+
+# 为分阶段训练生成统一的 WandB Run ID
+if [ -z "$WANDB_RUN_ID" ]; then
+    export WANDB_RUN_ID=$(python3 -c "import uuid; print(uuid.uuid4().hex[:8])")
+fi
+export WANDB_RESUME="allow"
+
+export WANDB_API_KEY=2639319e5c431af3ea5a25aa004b985328a8067c
 
 CUDA_IDS=0,1,2,3,4,5,6,7
 N_GPU=8
 
 MODEL_PATH="/gemini/space/telemem/model_zoo/Qwen2.5-VL-7B-Instruct"
 
-TOTAL_EPOCHES=2
-GLOBAL_BATCH_SIZE=256
-ROLLOUT_BATCH_SIZE=768
-VAL_BATCH_SIZE=1024
+GLOBAL_BATCH_SIZE=128
+ROLLOUT_BATCH_SIZE=384
+VAL_BATCH_SIZE=512
 MAX_PROMPT_LENGTH=4096
 rollout=8
-
 
 top_p_perception_tokens=0.4
 advantage_scaling_min=0.9
 entropy_penalty_coef=0.06
 
-
-# EXP_NAME="perc${top_p_perception_tokens}_advsc${advantage_scaling_min}_pen${entropy_penalty_coef}_ep${TOTAL_EPOCHES}_rollout${rollout}"
-EXP_NAME="perception_kl_coef_0.01_caption_kl_coef_0.00_pen${entropy_penalty_coef}_entropytopFalse"
+# EXP_NAME for this script
+EXP_NAME="vppo_7b_sc0.01_and_sp0.01_pen0.06"
+SAVE_PATH="./checkpoints/${EXP_NAME}"
 
 CONGI_FILE="examples/configs/config.yaml"
 TRAIN_FILE="/gemini/space/telemem/ljx/VPPO_ViRL39K_train/*_captioned.parquet"
@@ -36,6 +39,8 @@ VAL_FILE="/gemini/space/telemem/ljx/VPPO_MMK12_validation"
 FORMAT_PROMPT="examples/format_prompt/math_format_perception.jinja"
 REWARD_FUNCTION="examples/reward_function/math.py:compute_score_wo_format"
 
+# 同时使用 SC 和 SP KL 奖励
+echo "Starting training with both SC and SP KL reward"
 CUDA_VISIBLE_DEVICES=${CUDA_IDS} python3 -m verl.trainer.main \
     config=${CONGI_FILE} \
     data.train_files=${TRAIN_FILE} \
@@ -47,18 +52,19 @@ CUDA_VISIBLE_DEVICES=${CUDA_IDS} python3 -m verl.trainer.main \
     worker.actor.global_batch_size=${GLOBAL_BATCH_SIZE} \
     trainer.experiment_name=${EXP_NAME} \
     trainer.n_gpus_per_node=${N_GPU} \
-    trainer.total_epochs=${TOTAL_EPOCHES} \
+    trainer.total_epochs=2 \
+    trainer.save_freq=1 \
+    trainer.save_checkpoint_path=${SAVE_PATH} \
     worker.reward.reward_function=${REWARD_FUNCTION} \
     data.max_prompt_length=${MAX_PROMPT_LENGTH} \
     trainer.project_name="7b_vppo" \
     trainer.logger=['console','wandb'] \
     algorithm.use_vppo_on_entropy=False \
-    algorithm.top_p_entropy_tokens=0.2 \
     algorithm.use_vppo_on_perception=False \
-    algorithm.use_perception_kl_loss=True \
-    algorithm.perception_kl_coef=0.01 \
-    algorithm.use_caption_kl_loss=False \
-    algorithm.caption_kl_coef=0.00 \
+    algorithm.use_sp_kl_reward=True \
+    algorithm.sp_kl_coef=0.02 \
+    algorithm.use_sc_kl_reward=True \
+    algorithm.sc_kl_coef=0.01 \
     algorithm.use_advantage_shaping=False \
     algorithm.use_entropy_penalty=True \
     algorithm.top_p_perception_tokens=${top_p_perception_tokens} \

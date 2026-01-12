@@ -126,7 +126,8 @@ class RLHFDataset(Dataset):
         else:
             data_split = "train"
 
-        if os.path.exists(data_path):
+        import glob
+        if os.path.exists(data_path) or glob.glob(data_path):
             if os.path.isdir(data_path):
                 files = os.listdir(data_path)
                 parquet_files = [f for f in files if f.endswith('.parquet')]
@@ -159,7 +160,7 @@ class RLHFDataset(Dataset):
                 num_proc=filter_overlong_prompts_workers,
             )
 
-    def _build_messages(self, example: dict[str, Any]) -> list[dict[str, Any]]:
+    def _build_messages(self, example: dict[str, Any], use_caption: bool = False) -> list[dict[str, Any]]:
         prompt_str: str = example[self.prompt_key]
         if self.format_prompt:
             format_prompt = Template(self.format_prompt.strip())
@@ -168,9 +169,14 @@ class RLHFDataset(Dataset):
         if self.image_key in example:
             # https://huggingface.co/docs/transformers/en/tasks/image_text_to_text
             content_list = []
+            captions = example.get('caption', []) if use_caption else []
+            
             for i, content in enumerate(prompt_str.split("<image>")):
                 if i != 0:
-                    content_list.append({"type": "image"})
+                    if use_caption and len(captions) >= i:
+                        content_list.append({"type": "text", "text": captions[i-1]})
+                    else:
+                        content_list.append({"type": "image"})
 
                 if content:
                     content_list.append({"type": "text", "text": content})
@@ -227,7 +233,6 @@ class RLHFDataset(Dataset):
     def __getitem__(self, index):
         example: dict = self.dataset[index]
         messages = self._build_messages(example)
-        example.pop(self.prompt_key, None)
 
         if self.image_key in example:
             prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -314,6 +319,36 @@ class RLHFDataset(Dataset):
         example["input_ids"] = input_ids
         example["attention_mask"] = attention_mask
         example["position_ids"] = position_ids
+        
+        # Handle caption-based input if available
+        if "caption" in example:
+            caption_messages = self._build_messages(example, use_caption=True)
+            caption_prompt = self.tokenizer.apply_chat_template(caption_messages, add_generation_prompt=True, tokenize=False)
+            # Process as pure text
+            caption_model_inputs = self.tokenizer([caption_prompt], add_special_tokens=False, return_tensors="pt")
+            c_input_ids = caption_model_inputs.pop("input_ids")[0]
+            c_attention_mask = caption_model_inputs.pop("attention_mask")[0]
+            
+            # For pure text, position_ids is just cumsum
+            c_position_ids = torch.clip(c_attention_mask.cumsum(dim=0) - 1, min=0, max=None)
+            
+            # If it's Qwen2VL/Qwen3VL, expand to 4D even for text-only
+            if self.processor is not None and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__:
+                c_position_ids = c_position_ids.unsqueeze(0).expand(4, -1).to(c_attention_mask.device)
+            
+            c_input_ids, c_attention_mask, c_position_ids = VF.postprocess_data(
+                input_ids=c_input_ids,
+                attention_mask=c_attention_mask,
+                position_ids=c_position_ids,
+                max_length=self.max_prompt_length,
+                pad_token_id=self.tokenizer.pad_token_id,
+                left_pad=True,
+                truncation=self.truncation,
+            )
+            example["caption_prompt_ids"] = c_input_ids
+            example["caption_prompt_position_ids"] = c_position_ids
+
         example["raw_prompt_ids"] = raw_prompt_ids
         example["ground_truth"] = example.pop(self.answer_key)
+        example.pop(self.prompt_key, None)
         return example

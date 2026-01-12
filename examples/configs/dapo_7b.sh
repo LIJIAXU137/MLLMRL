@@ -3,8 +3,6 @@
 set -x
 
 export WANDB_API_KEY=2639319e5c431af3ea5a25aa004b985328a8067c
-export WANDB_RUN_ID="8gvv9eu8"
-export WANDB_RESUME="must"
 export PYTHONUNBUFFERED=1
 export RAY_memory_usage_threshold=0.98
 
@@ -23,11 +21,11 @@ rollout=8
 
 top_p_perception_tokens=0.4
 advantage_scaling_min=0.9
-entropy_penalty_coef=0.06
+entropy_penalty_coef=0.00
 
 
 # EXP_NAME="perc${top_p_perception_tokens}_advsc${advantage_scaling_min}_pen${entropy_penalty_coef}_ep${TOTAL_EPOCHES}_rollout${rollout}"
-EXP_NAME="perception_kl_coef_0.01_caption_kl_coef_0.00_pen${entropy_penalty_coef}_entropytopFalse"
+EXP_NAME="dapo_7b_entropy_0.00_pen${entropy_penalty_coef}"
 
 CONGI_FILE="examples/configs/config.yaml"
 TRAIN_FILE="/gemini/space/telemem/ljx/VPPO_ViRL39K_train/*_captioned.parquet"
@@ -55,16 +53,16 @@ CUDA_VISIBLE_DEVICES=${CUDA_IDS} python3 -m verl.trainer.main \
     algorithm.use_vppo_on_entropy=False \
     algorithm.top_p_entropy_tokens=0.2 \
     algorithm.use_vppo_on_perception=False \
-    algorithm.use_perception_kl_loss=True \
+    algorithm.use_perception_kl_loss=False \
     algorithm.perception_kl_coef=0.01 \
     algorithm.use_caption_kl_loss=False \
-    algorithm.caption_kl_coef=0.00 \
+    algorithm.caption_kl_coef=0.01 \
     algorithm.use_advantage_shaping=False \
-    algorithm.use_entropy_penalty=True \
+    algorithm.use_entropy_penalty=False \
     algorithm.top_p_perception_tokens=${top_p_perception_tokens} \
     algorithm.entropy_penalty_coef=${entropy_penalty_coef} \
     algorithm.advantage_scaling_min=${advantage_scaling_min} \
     worker.rollout.n=${rollout} \
     worker.rollout.limit_images=8 \
-    worker.actor.micro_batch_size_per_device_for_experience=32 \
-    worker.actor.micro_batch_size_per_device_for_update=16
+    worker.actor.micro_batch_size_per_device_for_experience=64 \
+    worker.actor.micro_batch_size_per_device_for_update=32

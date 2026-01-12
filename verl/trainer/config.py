@@ -110,6 +110,24 @@ class AlgorithmConfig:
     top_p_perception_tokens: float = 0.2
     """use vppo based on perception"""
 
+    use_perception_kl_loss: bool = False
+    use_perception_kl_reward: bool = False
+    perception_kl_coef: float = 0.01
+    """use kl loss or reward for perception"""
+
+    use_caption_kl_loss: bool = False
+    use_caption_kl_reward: bool = False
+    caption_kl_coef: float = 0.01
+    """use kl loss or reward for caption"""
+
+    use_sp_kl_reward: bool = False
+    sp_kl_coef: float = 0.01
+    """use semantics-preserving kl reward"""
+
+    use_sc_kl_reward: bool = False
+    sc_kl_coef: float = 0.01
+    """use semantics-changing kl reward"""
+
     use_entropy_penalty: bool = False
     entropy_penalty_coef: float = 0.06
     """use entropy penalty for training"""
@@ -197,6 +215,22 @@ class PPOConfig:
         # Use vppo based on perception
         self.worker.actor.use_vppo_on_perception = self.algorithm.use_vppo_on_perception
         self.worker.actor.top_p_perception_tokens = self.algorithm.top_p_perception_tokens
+
+        # Use perception kl loss
+        self.worker.actor.use_perception_kl_loss = self.algorithm.use_perception_kl_loss
+        self.worker.actor.use_perception_kl_reward = self.algorithm.use_perception_kl_reward
+        self.worker.actor.perception_kl_coef = self.algorithm.perception_kl_coef
+
+        # Use caption kl loss
+        self.worker.actor.use_caption_kl_loss = self.algorithm.use_caption_kl_loss
+        self.worker.actor.use_caption_kl_reward = self.algorithm.use_caption_kl_reward
+        self.worker.actor.caption_kl_coef = self.algorithm.caption_kl_coef
+
+        # Use SP/SC kl reward
+        self.worker.actor.use_sp_kl_reward = self.algorithm.use_sp_kl_reward
+        self.worker.actor.sp_kl_coef = self.algorithm.sp_kl_coef
+        self.worker.actor.use_sc_kl_reward = self.algorithm.use_sc_kl_reward
+        self.worker.actor.sc_kl_coef = self.algorithm.sc_kl_coef
 
         # Use entropy penalty for training
         self.worker.actor.use_entropy_penalty = self.algorithm.use_entropy_penalty

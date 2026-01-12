@@ -123,6 +123,24 @@ class ActorConfig:
     top_p_perception_tokens: float = 0.2
     """use vppo based on perception"""
 
+    use_perception_kl_loss: bool = False
+    use_perception_kl_reward: bool = False
+    perception_kl_coef: float = 0.01
+    """use kl loss or reward for perception"""
+
+    use_caption_kl_loss: bool = False
+    use_caption_kl_reward: bool = False
+    caption_kl_coef: float = 0.01
+    """use kl loss or reward for caption"""
+
+    use_sp_kl_reward: bool = False
+    sp_kl_coef: float = 0.01
+    """use semantics-preserving kl reward"""
+
+    use_sc_kl_reward: bool = False
+    sc_kl_coef: float = 0.01
+    """use semantics-changing kl reward"""
+
     use_entropy_penalty: bool = False
     entropy_penalty_coef: float = 0.06
     """use entropy penalty for training"""

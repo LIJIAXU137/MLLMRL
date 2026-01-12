@@ -247,8 +247,17 @@ class DataParallelPPOActor(BasePPOActor):
         select_keys.extend(["old_log_probs", "ref_log_probs", "advantages"])
         non_tensor_select_keys = ["multi_modal_inputs"]
 
-        if self.config.use_vppo_on_perception:
+        if self.config.use_vppo_on_perception or self.config.use_perception_kl_loss or self.config.use_perception_kl_reward:
             select_keys.append("aug_log_probs")
+
+        if self.config.use_sp_kl_reward and "sp_log_probs" in data.batch:
+            select_keys.append("sp_log_probs")
+
+        if self.config.use_sc_kl_reward and "sc_log_probs" in data.batch:
+            select_keys.append("sc_log_probs")
+
+        if (self.config.use_caption_kl_loss or self.config.use_caption_kl_reward) and "caption_log_probs" in data.batch:
+            select_keys.append("caption_log_probs")
 
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
@@ -395,72 +404,75 @@ class DataParallelPPOActor(BasePPOActor):
                                 if rejected_entropies.numel() > 0:
                                     metrics["actor/entropy_mean_rejected"].append(rejected_entropies.mean().item())
 
-                    if self.config.use_vppo_on_perception:
+                    if self.config.use_vppo_on_perception or self.config.use_perception_kl_loss or self.config.use_perception_kl_reward:
                         # Use vppo based on perception: Calculate the top p tokens based on perception.
-                        top_p = self.config.top_p_perception_tokens
+                        # Also compute low_var_kl for perception KL loss if enabled.
                         
                         aug_log_probs = model_inputs["aug_log_probs"]
                         log_probs_diff = (aug_log_probs - old_log_probs).clamp(-20.0, 20.0)
                         low_var_kl = (log_probs_diff.exp() - log_probs_diff - 1).contiguous()
                         low_var_kl = torch.clamp(low_var_kl, min=0.0, max=10.0)
 
-                        low_var_kl_for_sort = low_var_kl.clone()
-                        invalid_mask = ~response_mask.bool()
-                        low_var_kl_for_sort[invalid_mask] = -torch.inf
-
-                        # Calculate the number of tokens to keep for each response.
-                        num_valid_tokens = response_mask.sum(dim=1)
-                        k = torch.ceil(num_valid_tokens * top_p).int()
-
-                        # Sort the perception differences in descending order to get values and original indices.
-                        sorted_vals, sorted_indices = torch.sort(low_var_kl_for_sort, dim=1, descending=True)
-                        
-                        # Create a rank mask to identify the top k positions in each response.
-                        range_tensor = torch.arange(low_var_kl_for_sort.size(1), device=low_var_kl_for_sort.device).expand_as(low_var_kl_for_sort)
-                        rank_mask = range_tensor < k.unsqueeze(1)
-
-                        # Use scatter to map the rank mask back to the original token order, creating the final perception mask.
-                        top_p_mask = torch.zeros_like(low_var_kl_for_sort, dtype=torch.bool)
-                        top_p_mask.scatter_(1, sorted_indices, rank_mask)
-                        
-                        top_p_mask = (top_p_mask.bool() & response_mask.bool()).to(log_probs.dtype)
-
-                        if loss_token_mask is not None:
-                            loss_token_mask = (loss_token_mask.bool() | top_p_mask.bool()).to(log_probs.dtype)
-                        else:
-                            loss_token_mask = top_p_mask
-
-                        # Calculate an average threshold for logging purposes.
-                        # This is the mean of the k-th largest perception difference for each response.
-                        k_safe_for_indexing = k.clone().clamp(min=1)
-                        threshold_indices = (k_safe_for_indexing - 1).unsqueeze(1)
-                        
-                        threshold_per_response = torch.gather(sorted_vals, 1, threshold_indices.long()).squeeze(1)
-                        
-                        valid_thresholds = threshold_per_response[k > 0]
-                        if valid_thresholds.numel() > 0:
-                            threshold = valid_thresholds.mean()
-                        else:
-                            threshold = torch.tensor(0.0, device=low_var_kl_for_sort.device)
-
-                        # Add logging.
-                        with torch.no_grad():
-                            num_total_valid_tokens = response_mask.sum()
-                            num_selected_tokens = top_p_mask.sum()
+                        if self.config.use_vppo_on_perception:
+                            top_p = self.config.top_p_perception_tokens
                             
-                            if num_total_valid_tokens > 0:
-                                actual_token_fraction = (num_selected_tokens / num_total_valid_tokens).item()
-                                metrics["actor/perception_token_fraction"].append(actual_token_fraction)
-                                metrics["actor/low_var_kl_threshold"].append(threshold.item())
+                            low_var_kl_for_sort = low_var_kl.clone()
+                            invalid_mask = ~response_mask.bool()
+                            low_var_kl_for_sort[invalid_mask] = -torch.inf
 
-                                selected_low_var_kl = torch.masked_select(low_var_kl, top_p_mask.bool())
-                                if selected_low_var_kl.numel() > 0:
-                                    metrics["actor/low_var_kl_mean_selected"].append(selected_low_var_kl.mean().item())
+                            # Calculate the number of tokens to keep for each response.
+                            num_valid_tokens = response_mask.sum(dim=1)
+                            k = torch.ceil(num_valid_tokens * top_p).int()
 
-                                rejected_mask = response_mask.bool() & ~top_p_mask.bool()
-                                rejected_low_var_kl = torch.masked_select(low_var_kl, rejected_mask)
-                                if rejected_low_var_kl.numel() > 0:
-                                    metrics["actor/low_var_kl_mean_rejected"].append(rejected_low_var_kl.mean().item())
+                            # Sort the perception differences in descending order to get values and original indices.
+                            sorted_vals, sorted_indices = torch.sort(low_var_kl_for_sort, dim=1, descending=True)
+                            
+                            # Create a rank mask to identify the top k positions in each response.
+                            range_tensor = torch.arange(low_var_kl_for_sort.size(1), device=low_var_kl_for_sort.device).expand_as(low_var_kl_for_sort)
+                            rank_mask = range_tensor < k.unsqueeze(1)
+
+                            # Use scatter to map the rank mask back to the original token order, creating the final perception mask.
+                            top_p_mask = torch.zeros_like(low_var_kl_for_sort, dtype=torch.bool)
+                            top_p_mask.scatter_(1, sorted_indices, rank_mask)
+                            
+                            top_p_mask = (top_p_mask.bool() & response_mask.bool()).to(log_probs.dtype)
+
+                            if loss_token_mask is not None:
+                                loss_token_mask = (loss_token_mask.bool() | top_p_mask.bool()).to(log_probs.dtype)
+                            else:
+                                loss_token_mask = top_p_mask
+
+                            # Calculate an average threshold for logging purposes.
+                            # This is the mean of the k-th largest perception difference for each response.
+                            k_safe_for_indexing = k.clone().clamp(min=1)
+                            threshold_indices = (k_safe_for_indexing - 1).unsqueeze(1)
+                            
+                            threshold_per_response = torch.gather(sorted_vals, 1, threshold_indices.long()).squeeze(1)
+                            
+                            valid_thresholds = threshold_per_response[k > 0]
+                            if valid_thresholds.numel() > 0:
+                                threshold = valid_thresholds.mean()
+                            else:
+                                threshold = torch.tensor(0.0, device=low_var_kl_for_sort.device)
+
+                            # Add logging.
+                            with torch.no_grad():
+                                num_total_valid_tokens = response_mask.sum()
+                                num_selected_tokens = top_p_mask.sum()
+                                
+                                if num_total_valid_tokens > 0:
+                                    actual_token_fraction = (num_selected_tokens / num_total_valid_tokens).item()
+                                    metrics["actor/perception_token_fraction"].append(actual_token_fraction)
+                                    metrics["actor/low_var_kl_threshold"].append(threshold.item())
+
+                                    selected_low_var_kl = torch.masked_select(low_var_kl, top_p_mask.bool())
+                                    if selected_low_var_kl.numel() > 0:
+                                        metrics["actor/low_var_kl_mean_selected"].append(selected_low_var_kl.mean().item())
+
+                                    rejected_mask = response_mask.bool() & ~top_p_mask.bool()
+                                    rejected_low_var_kl = torch.masked_select(low_var_kl, rejected_mask)
+                                    if rejected_low_var_kl.numel() > 0:
+                                        metrics["actor/low_var_kl_mean_rejected"].append(rejected_low_var_kl.mean().item())
 
                     if self.config.use_vppo_on_entropy and self.config.use_vppo_on_perception:
                         # Add combined logging.
@@ -560,6 +572,31 @@ class DataParallelPPOActor(BasePPOActor):
                         metrics["actor/kl_coef"] = self.config.kl_coef
                     else:
                         loss = pg_loss
+
+                    if self.config.use_perception_kl_loss:
+                        # compute perception kl using CURRENT log_probs to enable gradients
+                        aug_log_probs = model_inputs["aug_log_probs"]
+                        curr_log_probs_diff = (log_probs - aug_log_probs).clamp(-20.0, 20.0)
+                        curr_low_var_kl = (curr_log_probs_diff.exp() - curr_log_probs_diff - 1).contiguous()
+                        curr_low_var_kl = torch.clamp(curr_low_var_kl, min=0.0, max=10.0)
+
+                        # we want to maximize KL, so subtract it from loss (minimize -KL)
+                        perception_kl = average_loss(curr_low_var_kl, response_mask, mode=self.config.loss_avg_mode)
+                        loss = loss - perception_kl * self.config.perception_kl_coef
+                        metrics["actor/perception_kl"] = perception_kl.detach().item()
+                        metrics["actor/perception_kl_coef"] = self.config.perception_kl_coef
+
+                    if self.config.use_caption_kl_loss and "caption_log_probs" in model_inputs:
+                        caption_log_probs = model_inputs["caption_log_probs"]
+                        # compute kl loss between CURRENT log_probs and caption to enable gradients
+                        log_probs_diff_caption = (log_probs - caption_log_probs).clamp(-20.0, 20.0)
+                        kld_caption = (log_probs_diff_caption.exp() - log_probs_diff_caption - 1).contiguous()
+                        kld_caption = torch.clamp(kld_caption, min=0.0, max=10.0)
+                        
+                        caption_kl = average_loss(kld_caption, response_mask, mode=self.config.loss_avg_mode)
+                        loss = loss + caption_kl * self.config.caption_kl_coef
+                        metrics["actor/caption_kl"] = caption_kl.detach().item()
+                        metrics["actor/caption_kl_coef"] = self.config.caption_kl_coef
 
                     if self.config.use_entropy_penalty:
                         # Use entropy penalty for training

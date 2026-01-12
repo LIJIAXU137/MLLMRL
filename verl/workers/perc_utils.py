@@ -1,6 +1,49 @@
+import random
 import numpy as np
-from PIL import Image
-from typing import Union, Tuple
+from PIL import Image, ImageFilter
+from typing import Union, Tuple, Optional
+import torchvision.transforms as T
+
+class RandomOcclusion:
+    def __init__(self, p=0.5, scale=(0.05, 0.15), iter=10):
+        """随机用噪声块遮挡图像"""
+        self.p = p          # 应用概率
+        self.scale = scale  # 遮挡块大小占比
+        self.iter = iter    # 遮挡次数
+    
+    def __call__(self, img):
+        if random.random() > self.p:
+            return img
+        w, h = img.size
+        img_copy = img.copy()
+        # 多次随机位置放置噪声块
+        for ii in range(self.iter):
+            occ_w = int(random.uniform(*self.scale) * w)
+            occ_h = int(random.uniform(*self.scale) * h)
+            x = random.randint(0, max(0, w - occ_w))
+            y = random.randint(0, max(0, h - occ_h))
+            noise = np.uint8(np.random.rand(occ_h, occ_w, 3) * 255)
+            patch = Image.fromarray(noise)
+            img_copy.paste(patch, (x, y))
+        return img_copy
+
+class RandomZoomCrop:
+    def __init__(self, scale=(0.8, 1.0)):
+        """随机裁剪后缩放回原尺寸"""
+        self.scale = scale
+    
+    def __call__(self, img):
+        w, h = img.size
+        # 随机裁剪scale比例的区域
+        scale_factor = random.uniform(*self.scale)
+        new_w = int(w * scale_factor)
+        new_h = int(h * scale_factor)
+        left = random.randint(0, w - new_w)
+        top = random.randint(0, h - new_h)
+        cropped = img.crop((left, top, left + new_w, top + new_h))
+        # 缩放回原始尺寸
+        zoomed = cropped.resize((w, h), Image.BILINEAR)
+        return zoomed
 
 def random_patch_blackening(pil_img, patch_size=14, black_prob=0.5):
     """Randomly blacken square patches in a PIL image."""
@@ -103,5 +146,33 @@ def gaussian_blur(pil_img: Image.Image, radius: Union[int, float] = 6.0):
     # ImageFilter.GaussianBlur() 会创建一个模糊滤镜对象
     # .filter() 方法返回一个新的、经过滤镜处理的图像
     return pil_img.filter(ImageFilter.GaussianBlur(radius=radius))
+
+# Semantics-Preserving:保持图像语义内容的变换
+sem_preserving_transforms = [
+    T.ColorJitter(brightness=(0.2, 1.3), contrast=(0.2, 1.8), saturation=(0.2, 1.8)),  # 颜色抖动
+    T.RandomPerspective(distortion_scale=0.2, p=0.5),  # 透视变换
+    T.RandomRotation(degrees=10),  # 旋转10度
+    T.GaussianBlur(kernel_size=3),  # 高斯模糊
+]
+
+# Semantics-Changing:显著改变图像语义内容的变换
+sem_changing_transforms = [
+    RandomOcclusion(p=1.0, iter=50),  # 随机遮挡50次
+    RandomZoomCrop(scale=(0.6, 0.7)),  # 大幅裁剪（60-70%）
+]
+
+def augment_image_semantics_preserving(img: Image.Image, idx: Optional[int] = None) -> Image.Image:
+    if idx is not None:
+        transform = sem_preserving_transforms[idx % len(sem_preserving_transforms)]
+    else:
+        transform = random.choice(sem_preserving_transforms)
+    return transform(img)
+
+def augment_image_semantics_changing(img: Image.Image, idx: Optional[int] = None) -> Image.Image:
+    if idx is not None:
+        transform = sem_changing_transforms[idx % len(sem_changing_transforms)]
+    else:
+        transform = random.choice(sem_changing_transforms)
+    return transform(img)
 
 augment_image = random_patch_blackening

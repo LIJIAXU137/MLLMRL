@@ -61,6 +61,7 @@ from .sharding_manager import FSDPVLLMShardingManager
 from .sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 from . import perc_utils
+from .perc_utils import augment_image_semantics_preserving, augment_image_semantics_changing
 
 
 class FSDPWorker(Worker):
@@ -529,6 +530,70 @@ class FSDPWorker(Worker):
 
         data.non_tensor_batch["multi_modal_inputs"] = np.array(batch_multi_modal_inputs, dtype=object)
 
+    def _process_sp_multi_modal_inputs(self, data: DataProto):
+        if "multi_modal_data" not in data.non_tensor_batch:
+            return
+
+        min_pixels = data.meta_info["min_pixels"]
+        max_pixels = data.meta_info["max_pixels"]
+        video_fps = data.meta_info["video_fps"]
+        batch_multi_modal_inputs = []
+        for multi_modal_data in data.non_tensor_batch["multi_modal_data"]:
+            images, videos = [], []
+            if "images" in multi_modal_data:
+                for image in multi_modal_data["images"]:
+                    images.append(process_image(image, min_pixels, max_pixels))
+
+            if "videos" in multi_modal_data:
+                for video in multi_modal_data["videos"]:
+                    videos.append(process_video(video, min_pixels, max_pixels, video_fps))
+
+            sp_images = [augment_image_semantics_preserving(image) for image in images]
+
+            if len(images) != 0:
+                multi_modal_inputs = dict(self.processor.image_processor(images=sp_images, return_tensors="pt"))
+            elif len(videos) != 0:
+                multi_modal_inputs = dict(self.processor.image_processor(images=None, videos=videos, return_tensors="pt"))
+            else:
+                multi_modal_inputs = {}
+
+            multi_modal_inputs = {k: v.to(torch.cuda.current_device(), non_blocking=True) for k, v in multi_modal_inputs.items()}
+            batch_multi_modal_inputs.append(multi_modal_inputs)
+
+        data.non_tensor_batch["multi_modal_inputs"] = np.array(batch_multi_modal_inputs, dtype=object)
+
+    def _process_sc_multi_modal_inputs(self, data: DataProto):
+        if "multi_modal_data" not in data.non_tensor_batch:
+            return
+
+        min_pixels = data.meta_info["min_pixels"]
+        max_pixels = data.meta_info["max_pixels"]
+        video_fps = data.meta_info["video_fps"]
+        batch_multi_modal_inputs = []
+        for multi_modal_data in data.non_tensor_batch["multi_modal_data"]:
+            images, videos = [], []
+            if "images" in multi_modal_data:
+                for image in multi_modal_data["images"]:
+                    images.append(process_image(image, min_pixels, max_pixels))
+
+            if "videos" in multi_modal_data:
+                for video in multi_modal_data["videos"]:
+                    videos.append(process_video(video, min_pixels, max_pixels, video_fps))
+
+            sc_images = [augment_image_semantics_changing(image) for image in images]
+
+            if len(images) != 0:
+                multi_modal_inputs = dict(self.processor.image_processor(images=sc_images, return_tensors="pt"))
+            elif len(videos) != 0:
+                multi_modal_inputs = dict(self.processor.image_processor(images=None, videos=videos, return_tensors="pt"))
+            else:
+                multi_modal_inputs = {}
+
+            multi_modal_inputs = {k: v.to(torch.cuda.current_device(), non_blocking=True) for k, v in multi_modal_inputs.items()}
+            batch_multi_modal_inputs.append(multi_modal_inputs)
+
+        data.non_tensor_batch["multi_modal_inputs"] = np.array(batch_multi_modal_inputs, dtype=object)
+
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def update_actor(self, data: DataProto):
@@ -687,6 +752,132 @@ class FSDPWorker(Worker):
             data = self.ulysses_sharding_manager.preprocess_data(data)
             output = self.actor.compute_log_prob(data=data)
             output = DataProto.from_dict(tensors={"aug_log_probs": output})
+            output = self.ulysses_sharding_manager.postprocess_data(output)
+
+        # https://pytorch.org/docs/stable/notes/fsdp.html#fsdp-notes
+        # unshard the root FSDP module
+        if self.world_size > 1:
+            self.fsdp_module._handle.reshard(True)
+
+        if self._use_param_offload:
+            offload_fsdp_model(self.fsdp_module)
+
+        output = output.to("cpu")
+        return output
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_sp_log_probs(self, data: DataProto):
+        assert self._has_actor
+
+        self._process_sp_multi_modal_inputs(data)
+        data = data.to(torch.cuda.current_device())
+
+        if self._use_param_offload:
+            load_fsdp_model(self.fsdp_module)
+
+        data.meta_info["temperature"] = self.config.rollout.temperature
+        with self.ulysses_sharding_manager:
+            data = self.ulysses_sharding_manager.preprocess_data(data)
+            output = self.actor.compute_log_prob(data=data)
+            output = DataProto.from_dict(tensors={"sp_log_probs": output})
+            output = self.ulysses_sharding_manager.postprocess_data(output)
+
+        # https://pytorch.org/docs/stable/notes/fsdp.html#fsdp-notes
+        # unshard the root FSDP module
+        if self.world_size > 1:
+            self.fsdp_module._handle.reshard(True)
+
+        if self._use_param_offload:
+            offload_fsdp_model(self.fsdp_module)
+
+        output = output.to("cpu")
+        return output
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_sc_log_probs(self, data: DataProto):
+        assert self._has_actor
+
+        self._process_sc_multi_modal_inputs(data)
+        data = data.to(torch.cuda.current_device())
+
+        if self._use_param_offload:
+            load_fsdp_model(self.fsdp_module)
+
+        data.meta_info["temperature"] = self.config.rollout.temperature
+        with self.ulysses_sharding_manager:
+            data = self.ulysses_sharding_manager.preprocess_data(data)
+            output = self.actor.compute_log_prob(data=data)
+            output = DataProto.from_dict(tensors={"sc_log_probs": output})
+            output = self.ulysses_sharding_manager.postprocess_data(output)
+
+        # https://pytorch.org/docs/stable/notes/fsdp.html#fsdp-notes
+        # unshard the root FSDP module
+        if self.world_size > 1:
+            self.fsdp_module._handle.reshard(True)
+
+        if self._use_param_offload:
+            offload_fsdp_model(self.fsdp_module)
+
+        output = output.to("cpu")
+        return output
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_caption_log_probs(self, data: DataProto):
+        assert self._has_actor
+
+        # Prepare caption-based input_ids and position_ids
+        responses = data.batch["responses"]
+        response_length = responses.size(-1)
+
+        caption_prompt_ids = data.batch["caption_prompt_ids"]
+        caption_prompt_pos_ids = data.batch["caption_prompt_position_ids"]
+
+        # Construct full input_ids: [CaptionPrompt, Response]
+        # Both are already tensors.
+        caption_input_ids = torch.cat([caption_prompt_ids, responses], dim=-1)
+
+        # Construct full position_ids
+        batch_size = responses.size(0)
+        delta = torch.arange(1, response_length + 1, device=responses.device)
+        if caption_prompt_pos_ids.ndim == 3:  # mrope (bsz, 4, seq) or (4, bsz, seq)
+            if caption_prompt_pos_ids.size(1) == 4:
+                delta = delta.view(1, 1, -1).expand(batch_size, 4, -1)
+            else:  # (4, bsz, seq)
+                delta = delta.view(1, 1, -1).expand(4, batch_size, -1)
+        else:
+            delta = delta.view(1, -1).expand(batch_size, -1)
+
+        response_pos_ids = caption_prompt_pos_ids[..., -1:] + delta
+        caption_position_ids = torch.cat([caption_prompt_pos_ids, response_pos_ids], dim=-1)
+
+        # Construct attention_mask
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
+        prompt_mask = (caption_prompt_ids != pad_id)
+        response_mask = torch.ones_like(responses, dtype=torch.bool)
+        caption_attention_mask = torch.cat([prompt_mask, response_mask], dim=-1)
+
+        # Create a new DataProto for forwarding
+        caption_data = DataProto.from_dict(
+            tensors={
+                "input_ids": caption_input_ids,
+                "position_ids": caption_position_ids,
+                "attention_mask": caption_attention_mask,
+                "responses": responses,
+            }
+        )
+        caption_data.meta_info = data.meta_info
+        caption_data.non_tensor_batch["multi_modal_inputs"] = np.array([{} for _ in range(batch_size)], dtype=object)
+
+        caption_data = caption_data.to(torch.cuda.current_device())
+
+        if self._use_param_offload:
+            load_fsdp_model(self.fsdp_module)
+
+        caption_data.meta_info["temperature"] = self.config.rollout.temperature
+        with self.ulysses_sharding_manager:
+            caption_data = self.ulysses_sharding_manager.preprocess_data(caption_data)
+            output = self.actor.compute_log_prob(data=caption_data)
+            output = DataProto.from_dict(tensors={"caption_log_probs": output})
             output = self.ulysses_sharding_manager.postprocess_data(output)
 
         # https://pytorch.org/docs/stable/notes/fsdp.html#fsdp-notes

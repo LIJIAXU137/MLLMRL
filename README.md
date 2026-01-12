@@ -1,5 +1,5 @@
 <div align="center">
-
+cd /gemini/space/telemem/ljx/VPPO-RL && conda activate vppo && python scripts/model_merger.py --local_dir checkpoints/vppo_7b_perception0.01_then_caption0.01_pen0.06/global_step_202/actor
 # Spotlight on Token Perception for Multimodal Reinforcement Learning
 
 </div>
@@ -36,6 +36,8 @@ Our proposed algorithm, **Visually-Perceptive Policy Optimization (VPPO)**, is t
 Standard reinforcement learning methods for LVLMs suffer from a fundamental flaw: they treat every token in a generated response as equally important. A single reward is broadcast indiscriminately, rewarding generic phrases just as much as the critical step where the model *perceives a key detail* from the image.
 
 Our analysis reveals two key truths about multimodal reasoning:
+
+
 
 1.  **Token visual dependency is sparse:** Only a small fraction of tokens in a reasoning chain are highly dependent on the visual input. These are the pivotal moments of visually-grounded reasoning.
 2.  **Trajectory visual dependency is heterogeneous:** Not all correct solutions are equal. Some are robustly grounded in visual evidence, while others are "lucky guesses" based on linguistic priors.
